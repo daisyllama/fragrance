@@ -1,0 +1,3 @@
+# Ignore generated data and output files
+all_unique_accords_and_notes.json
+frag_cleaned_sh.csv
