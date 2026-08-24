@@ -3,6 +3,11 @@
 *.csv
 *.parquet
 
+# Scraper test fixtures (large raw HTML snapshots)
+scraping/fixtures/*.html
+
+# Legacy/archived files kept locally for reference, not tracked in git
+legacy/
 
 # Python virtual environments
 venv/
