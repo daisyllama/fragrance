@@ -5,10 +5,6 @@ jobs/generate_embeddings_for_new_frag.py after adding a fragrance, instead
 of running the sentence-transformers model locally (avoids adding
 torch/sentence-transformers, ~1-2GB, to the app's dependencies).
 
-Runs the plain .py script (jobs/, not the notebooks/ equivalent) as a
-spark_python_task — simpler to trigger from outside Databricks than
-resolving a Git-folder notebook path.
-
 No persistent job or cluster is created: submitting a task with no cluster
 spec runs on serverless job compute (billed only for the run itself), which
 matches the no-standing-infra approach used throughout this project. If
