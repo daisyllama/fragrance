@@ -28,7 +28,7 @@ def top_n_similar(ids, matrix, norms, target_id, top_n: int) -> tuple:
     target_idx = matching[0]
     similarities = (matrix @ matrix[target_idx]) / (norms * norms[target_idx])
 
-    n = top_n + 1  # +1 to drop the target itself below
+    n = min(top_n + 1, len(ids))  # +1 to drop the target itself below; clamp to available rows
     top_idx = np.argpartition(-similarities, n - 1)[:n]
     top_idx = top_idx[np.argsort(-similarities[top_idx])]
 

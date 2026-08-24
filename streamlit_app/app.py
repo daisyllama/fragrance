@@ -20,7 +20,12 @@ import streamlit as st
 # Repo root, so `common` (shared with the notebooks/) is importable
 # regardless of the working directory `streamlit run` is launched from.
 sys.path.append(str(Path(__file__).resolve().parent.parent))
-from common.add_fragrance import clean_and_merge_fragrance, merge_frag_raw  # noqa: E402
+from common.add_fragrance import (  # noqa: E402
+    check_existing_state,
+    extract_cleaned_row,
+    merge_fragrance_cleaned,
+    merge_frag_raw,
+)
 from common.databricks_jobs import trigger_embedding_job  # noqa: E402
 from common.matching import normalize_concentration, fuzzy_score  # noqa: E402
 from common.scraping import scrape_fragrantica  # noqa: E402
@@ -72,11 +77,18 @@ def render_notes(row):
 
 
 def render_search_tab():
-    cleaned_df, embedding_ids, matrix, norms = load_data()
-
     search_term = st.text_input("Search for a perfume by name", "")
     if not search_term.strip():
         return
+
+    # Deferred until there's actually something to search for — this tab's
+    # code still runs on every rerun regardless of which tab is active
+    # (st.tabs() doesn't lazily skip inactive tabs), so calling this
+    # unconditionally would open a Databricks connection and pull both
+    # tables on every interaction anywhere in the app, including the Add
+    # a fragrance tab (which has no Databricks dependency until you
+    # actually confirm an add).
+    cleaned_df, embedding_ids, matrix, norms = load_data()
 
     term_norm = normalize_concentration(search_term.strip().lower())
     scores = cleaned_df["name"].apply(lambda n: fuzzy_score(n, term_norm))
@@ -165,13 +177,37 @@ def render_add_tab():
         try:
             with st.status("Adding fragrance...", expanded=True) as status:
                 with conn.cursor() as cur:
+                    st.write("Extracting fields...")
+                    cleaned_row = extract_cleaned_row(cur, scraped)
+                    label = f"{cleaned_row['name']} — {cleaned_row['brand']} (id {cleaned_row['id']})"
+
+                    # Check existing state BEFORE writing, so we can compare
+                    # against what was there before and decide whether the
+                    # (slow) embedding job is actually needed.
+                    existing = check_existing_state(cur, cleaned_row["id"])
+
                     st.write("Merging into `frag_raw`...")
                     merge_frag_raw(cur, scraped)
 
-                    st.write("Cleaning and merging into `fragrance_cleaned`...")
-                    cleaned_row = clean_and_merge_fragrance(cur, scraped)
-                    st.write(f"→ id `{cleaned_row['id']}`: {cleaned_row['name']} — {cleaned_row['brand']}")
+                    st.write("Merging into `fragrance_cleaned`...")
+                    merge_fragrance_cleaned(cur, cleaned_row)
 
+                if not existing["in_cleaned"]:
+                    outcome = f"Added: {label}."
+                    needs_embedding = True
+                elif existing["embedded_perfume_string"] is None:
+                    outcome = f"{label} already existed but had no embedding yet — generating it now."
+                    needs_embedding = True
+                elif existing["embedded_perfume_string"] == cleaned_row["perfume_string"]:
+                    outcome = f"{label} already exists — no changes detected."
+                    needs_embedding = False
+                else:
+                    outcome = f"Perfume details updated: {label}."
+                    needs_embedding = True
+
+                st.write(outcome)
+
+                if needs_embedding:
                     st.write("Triggering Databricks job to generate the embedding (this can take a minute, especially if compute needs to spin up)...")
                     creds = st.secrets["databricks"]
                     trigger_embedding_job(
@@ -180,11 +216,13 @@ def render_add_tab():
                         python_file=creds["embedding_job_python_file"],
                         cluster_id=creds.get("job_cluster_id"),
                     )
+                else:
+                    st.write("Embedding already up to date — skipping the job.")
 
                 status.update(label="Done", state="complete")
 
             load_data.clear()
-            st.success(f"Added: {cleaned_row['name']} — {cleaned_row['brand']} (id {cleaned_row['id']}). It's searchable now.")
+            st.success(f"{outcome} It's searchable now.")
             del st.session_state["scraped"]
         except Exception as e:
             st.error(f"Failed: {e}")

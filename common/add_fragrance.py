@@ -53,11 +53,10 @@ def merge_frag_raw(cursor, scraped: dict) -> None:
     )
 
 
-def clean_and_merge_fragrance(cursor, scraped: dict) -> dict:
+def extract_cleaned_row(cursor, scraped: dict) -> dict:
     """Run the same regex extraction 01_clean_from_raw.py uses on this one
-    row, then MERGE the result into fragrance_cleaned. Returns the
-    transformed row (dict), including its derived `id` and `perfume_string`
-    — the caller needs both for the embedding step."""
+    row (read-only — no write). Returns the transformed row (dict),
+    including its derived `id` and `perfume_string`."""
     params = {
         "url": scraped["url"],
         "main_accords": str(scraped.get("main_accords", [])),
@@ -80,8 +79,34 @@ def clean_and_merge_fragrance(cursor, scraped: dict) -> dict:
         params,
     )
     columns = [c[0] for c in cursor.description]
-    row = dict(zip(columns, cursor.fetchone()))
+    return dict(zip(columns, cursor.fetchone()))
 
+
+def check_existing_state(cursor, fragrance_id: str) -> dict:
+    """Look up whether this id already exists — in fragrance_cleaned, and
+    (separately) what perfume_string it was last embedded with, if any.
+    Call this BEFORE merge_fragrance_cleaned, since that call overwrites
+    the fragrance_cleaned row this checks. Returns
+    {"in_cleaned": bool, "embedded_perfume_string": str | None}."""
+    cursor.execute(
+        f"SELECT 1 FROM {CATALOG_SCHEMA}.fragrance_cleaned WHERE id = :id",
+        {"id": fragrance_id},
+    )
+    in_cleaned = cursor.fetchone() is not None
+
+    cursor.execute(
+        f"SELECT perfume_string FROM {CATALOG_SCHEMA}.fragrance_embeddings WHERE id = :id",
+        {"id": fragrance_id},
+    )
+    embedding_row = cursor.fetchone()
+    embedded_perfume_string = embedding_row[0] if embedding_row else None
+
+    return {"in_cleaned": in_cleaned, "embedded_perfume_string": embedded_perfume_string}
+
+
+def merge_fragrance_cleaned(cursor, row: dict) -> None:
+    """MERGE an already-extracted row (from extract_cleaned_row) into
+    fragrance_cleaned, keyed by id."""
     cursor.execute(
         f"""
         MERGE INTO {CATALOG_SCHEMA}.fragrance_cleaned AS target
@@ -111,4 +136,3 @@ def clean_and_merge_fragrance(cursor, scraped: dict) -> dict:
             "perfume_string": row["perfume_string"],
         },
     )
-    return row
