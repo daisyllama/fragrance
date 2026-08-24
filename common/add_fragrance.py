@@ -56,21 +56,31 @@ def merge_frag_raw(cursor, scraped: dict) -> None:
 def extract_cleaned_row(cursor, scraped: dict) -> dict:
     """Run the same regex extraction 01_clean_from_raw.py uses on this one
     row (read-only — no write). Returns the transformed row (dict),
-    including its derived `id` and `perfume_string`."""
+    including its derived `id` and `perfume_string`.
+
+    Also cleans `perfumers` the same way 01_clean_from_raw.py does (strip
+    the raw bracket-list formatting) — not part of the shared
+    EXTRACTED_FIELDS_SQL fragment since 04_add_update_fragrance.py's manual
+    entry flow never captures it, but fragrance_cleaned's real schema has a
+    `perfumers` column, so it must be provided here or the star-syntax
+    MERGE in merge_fragrance_cleaned fails to resolve it."""
     params = {
         "url": scraped["url"],
         "main_accords": str(scraped.get("main_accords", [])),
         "description": str(scraped.get("description")),
         "gender": str(scraped.get("gender")),
+        "perfumers": str(scraped.get("perfumers", [])),
     }
 
     cursor.execute(
         f"""
         WITH source_row AS (
-            SELECT :url AS url, :main_accords AS main_accords, :description AS description, :gender AS gender
+            SELECT :url AS url, :main_accords AS main_accords, :description AS description,
+                   :gender AS gender, :perfumers AS perfumers
         ),
         extracted AS (
-            SELECT {EXTRACTED_FIELDS_SQL}, gender, url, description
+            SELECT {EXTRACTED_FIELDS_SQL}, gender, url, description,
+                   replace(replace(replace(perfumers, '[', ''), ']', ''),"'", "") as perfumers
             FROM source_row
         )
         SELECT *, {CATALOG_SCHEMA}.generate_perfume_string(accords, top_notes, mid_notes, base_notes) AS perfume_string
@@ -106,7 +116,16 @@ def check_existing_state(cursor, fragrance_id: str) -> dict:
 
 def merge_fragrance_cleaned(cursor, row: dict) -> None:
     """MERGE an already-extracted row (from extract_cleaned_row) into
-    fragrance_cleaned, keyed by id."""
+    fragrance_cleaned, keyed by id.
+
+    Uses an explicit UPDATE SET / INSERT column list rather than star
+    syntax (`UPDATE SET *`) deliberately: fragrance_cleaned's real schema
+    (from 01_clean_from_raw.py's full SELECT) also has rating, rating_count,
+    and rn columns this pipeline never populates, and star syntax requires
+    every target column to resolve against the source or the MERGE fails
+    with DELTA_MERGE_UNRESOLVED_EXPRESSION. An explicit list just leaves
+    those columns alone on UPDATE / NULL on INSERT, same as
+    04_add_update_fragrance.py's manual-entry flow already does."""
     cursor.execute(
         f"""
         MERGE INTO {CATALOG_SCHEMA}.fragrance_cleaned AS target
@@ -114,12 +133,32 @@ def merge_fragrance_cleaned(cursor, row: dict) -> None:
             SELECT
                 :id AS id, :name AS name, :brand AS brand, :release_year AS release_year,
                 :gender AS gender, :accords AS accords, :top_notes AS top_notes,
-                :mid_notes AS mid_notes, :base_notes AS base_notes, :url AS url,
-                :description AS description, :perfume_string AS perfume_string
+                :mid_notes AS mid_notes, :base_notes AS base_notes, :perfumers AS perfumers,
+                :url AS url, :description AS description, :perfume_string AS perfume_string
         ) AS source
         ON target.id = source.id
-        WHEN MATCHED THEN UPDATE SET *
-        WHEN NOT MATCHED THEN INSERT *
+        WHEN MATCHED THEN UPDATE SET
+            target.name = source.name,
+            target.brand = source.brand,
+            target.release_year = source.release_year,
+            target.gender = source.gender,
+            target.accords = source.accords,
+            target.top_notes = source.top_notes,
+            target.mid_notes = source.mid_notes,
+            target.base_notes = source.base_notes,
+            target.perfumers = source.perfumers,
+            target.url = source.url,
+            target.description = source.description,
+            target.perfume_string = source.perfume_string
+        WHEN NOT MATCHED THEN INSERT (
+            id, name, brand, release_year, gender, accords, top_notes,
+            mid_notes, base_notes, perfumers, url, description, perfume_string
+        )
+        VALUES (
+            source.id, source.name, source.brand, source.release_year, source.gender,
+            source.accords, source.top_notes, source.mid_notes, source.base_notes,
+            source.perfumers, source.url, source.description, source.perfume_string
+        )
         """,
         {
             "id": row["id"],
@@ -131,6 +170,7 @@ def merge_fragrance_cleaned(cursor, row: dict) -> None:
             "top_notes": row["top_notes"],
             "mid_notes": row["mid_notes"],
             "base_notes": row["base_notes"],
+            "perfumers": row["perfumers"],
             "url": row["url"],
             "description": row["description"],
             "perfume_string": row["perfume_string"],

@@ -63,6 +63,21 @@ class TestTriggerEmbeddingJob:
         task = kwargs["tasks"][0]
         assert task.existing_cluster_id is None
 
+    def test_no_cluster_id_sets_an_environment_key_and_environment_spec(self):
+        # Serverless job compute requires every non-notebook task to
+        # reference a defined environment, or submit fails with
+        # "An environment is required for serverless task ...".
+        client, _ = _mock_client_returning(RunResultState.SUCCESS)
+        with patch("common.databricks_jobs.WorkspaceClient", return_value=client):
+            trigger_embedding_job(host="h", token="t", python_file="/f.py")
+        _, kwargs = client.jobs.submit.call_args
+        task = kwargs["tasks"][0]
+        assert task.environment_key is not None
+        environments = kwargs["environments"]
+        assert environments is not None
+        assert environments[0].environment_key == task.environment_key
+        assert "sentence-transformers" in environments[0].spec.dependencies
+
     def test_cluster_id_is_set_on_the_task_when_given(self):
         client, _ = _mock_client_returning(RunResultState.SUCCESS)
         with patch("common.databricks_jobs.WorkspaceClient", return_value=client):
@@ -70,6 +85,17 @@ class TestTriggerEmbeddingJob:
         _, kwargs = client.jobs.submit.call_args
         task = kwargs["tasks"][0]
         assert task.existing_cluster_id == "0000-1111-abcd"
+
+    def test_cluster_id_means_no_environment_is_required(self):
+        # An existing all-purpose cluster already has its own environment —
+        # only the serverless path needs one defined.
+        client, _ = _mock_client_returning(RunResultState.SUCCESS)
+        with patch("common.databricks_jobs.WorkspaceClient", return_value=client):
+            trigger_embedding_job(host="h", token="t", python_file="/f.py", cluster_id="0000-1111-abcd")
+        _, kwargs = client.jobs.submit.call_args
+        task = kwargs["tasks"][0]
+        assert task.environment_key is None
+        assert kwargs["environments"] is None
 
     def test_no_real_network_call_is_made(self):
         # Sanity check on the test setup: WorkspaceClient is fully replaced,

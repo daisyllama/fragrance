@@ -65,12 +65,19 @@ def main():
         "embedding", F.expr("transform(embedding, x -> cast(x as float))")
     ).withColumn("id", F.col("id").cast("long"))
 
+    # Explicit column sets, not whenMatchedUpdateAll()/whenNotMatchedInsertAll():
+    # fragrance_embeddings has columns (e.g. partition_key) this pipeline
+    # never populates, and the "update/insert all" star-equivalent requires
+    # every target column to resolve against the source or the MERGE fails
+    # with DELTA_MERGE_UNRESOLVED_EXPRESSION.
     target = DeltaTable.forName(spark, f"{CATALOG_SCHEMA}.fragrance_embeddings")
     (
         target.alias("t")
         .merge(embeddings_df.alias("s"), "t.id = s.id")
-        .whenMatchedUpdateAll()
-        .whenNotMatchedInsertAll()
+        .whenMatchedUpdate(set={"perfume_string": "s.perfume_string", "embedding": "s.embedding"})
+        .whenNotMatchedInsert(
+            values={"id": "s.id", "perfume_string": "s.perfume_string", "embedding": "s.embedding"}
+        )
         .execute()
     )
     print(f"Upserted {embeddings_df.count()} embedding(s) into fragrance_embeddings.")

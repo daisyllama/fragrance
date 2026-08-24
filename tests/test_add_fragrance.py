@@ -56,6 +56,7 @@ EXTRACTED_ROW = {
     "top_notes": "white tea",
     "mid_notes": "rose",
     "base_notes": "musk",
+    "perfumers": "",
     "gender": "for women and men",
     "url": SCRAPED["url"],
     "description": SCRAPED["description"],
@@ -113,12 +114,19 @@ class TestExtractCleanedRow:
         assert "MERGE" not in sql
         assert "SELECT" in sql
 
-    def test_passes_url_main_accords_description_gender_as_params(self):
+    def test_passes_url_main_accords_description_gender_perfumers_as_params(self):
         cur = FakeCursor(extraction_row=EXTRACTED_ROW)
         extract_cleaned_row(cur, SCRAPED)
         _, params = cur.queries[0]
         assert params["url"] == SCRAPED["url"]
         assert params["gender"] == SCRAPED["gender"]
+        assert params["perfumers"] == "[]"
+
+    def test_cleans_perfumers_bracket_formatting_in_the_select(self):
+        cur = FakeCursor(extraction_row=EXTRACTED_ROW)
+        extract_cleaned_row(cur, SCRAPED)
+        sql, _ = cur.queries[0]
+        assert "as perfumers" in sql
 
 
 class TestCheckExistingState:
@@ -162,7 +170,7 @@ class TestMergeFragranceCleaned:
         cur = FakeCursor()
         merge_fragrance_cleaned(cur, EXTRACTED_ROW)
         _, params = cur.queries[0]
-        for key in ("id", "name", "brand", "perfume_string"):
+        for key in ("id", "name", "brand", "perfumers", "perfume_string"):
             assert params[key] == EXTRACTED_ROW[key]
 
     def test_does_not_string_interpolate_row_text_into_the_sql(self):
@@ -172,3 +180,29 @@ class TestMergeFragranceCleaned:
         sql, params = cur.queries[0]
         assert "' quote" not in sql
         assert params["description"] == "notes with a ' quote"
+
+    def test_does_not_use_star_syntax(self):
+        # Regression guard: `UPDATE SET *` / `INSERT *` requires every
+        # target-table column to resolve against the source, and
+        # fragrance_cleaned's real schema has columns (rating, rating_count,
+        # rn) this pipeline never populates — star syntax fails against
+        # them with DELTA_MERGE_UNRESOLVED_EXPRESSION. Must stay an
+        # explicit column list.
+        cur = FakeCursor()
+        merge_fragrance_cleaned(cur, EXTRACTED_ROW)
+        sql, _ = cur.queries[0]
+        assert "UPDATE SET *" not in sql
+        assert "INSERT *" not in sql
+
+    def test_explicit_column_list_covers_every_extracted_row_key_except_id(self):
+        # id is the MERGE key (used in ON, not SET) — every other key
+        # extract_cleaned_row produces must actually be written somewhere,
+        # or data silently gets dropped on the way into fragrance_cleaned.
+        cur = FakeCursor()
+        merge_fragrance_cleaned(cur, EXTRACTED_ROW)
+        sql, params = cur.queries[0]
+        for key in EXTRACTED_ROW:
+            if key == "id":
+                continue
+            assert f"target.{key} = source.{key}" in sql
+            assert key in params

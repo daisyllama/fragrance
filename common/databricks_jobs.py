@@ -14,7 +14,10 @@ all-purpose cluster instead.
 """
 
 from databricks.sdk import WorkspaceClient
-from databricks.sdk.service.jobs import Run, RunResultState, SparkPythonTask, SubmitTask
+from databricks.sdk.service.compute import Environment
+from databricks.sdk.service.jobs import JobEnvironment, Run, RunResultState, SparkPythonTask, SubmitTask
+
+ENVIRONMENT_KEY = "generate_embeddings_env"
 
 
 def trigger_embedding_job(host: str, token: str, python_file: str, cluster_id: str = None) -> Run:
@@ -24,8 +27,24 @@ def trigger_embedding_job(host: str, token: str, python_file: str, cluster_id: s
     client = WorkspaceClient(host=host, token=token)
 
     task_kwargs = {}
+    environments = None
     if cluster_id:
         task_kwargs["existing_cluster_id"] = cluster_id
+    else:
+        # Serverless job compute requires every non-notebook task to
+        # reference a defined environment (client version + pip deps) —
+        # otherwise submit fails with "An environment is required for
+        # serverless task ...".
+        task_kwargs["environment_key"] = ENVIRONMENT_KEY
+        environments = [
+            JobEnvironment(
+                environment_key=ENVIRONMENT_KEY,
+                spec=Environment(
+                    environment_version="2",
+                    dependencies=["sentence-transformers"],
+                ),
+            )
+        ]
 
     task = SubmitTask(
         task_key="generate_embeddings",
@@ -33,7 +52,11 @@ def trigger_embedding_job(host: str, token: str, python_file: str, cluster_id: s
         **task_kwargs,
     )
 
-    run = client.jobs.submit(run_name="add_fragrance_generate_embeddings", tasks=[task]).result()
+    run = client.jobs.submit(
+        run_name="add_fragrance_generate_embeddings",
+        tasks=[task],
+        environments=environments,
+    ).result()
 
     result_state = run.state.result_state if run.state else None
     if result_state != RunResultState.SUCCESS:
