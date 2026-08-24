@@ -20,16 +20,35 @@ fragrance_cleaned = spark.table("fragrance_db.default.fragrance_cleaned")
 # COMMAND ----------
 
 # DBTITLE 1,Step 1 — search by text, get an id
-search_term = "velvet rouge"
+search_term = "miss dior eau de parfum"
+
+# Perfume names store the concentration inconsistently ("edp" vs "eau de
+# parfum", etc.) — collapse both spellings to the same abbreviation before
+# scoring so either form matches regardless of which one the name uses.
+CONCENTRATION_ALIASES = {
+    r"\beau de parfum\b": "edp",
+    r"\beau de toilette\b": "edt",
+    r"\beau de cologne\b": "edc",
+    r"\bextrait de parfum\b": "extrait",
+    r"\bparfum extrait\b": "extrait",
+}
+
+
+def normalize_concentration(text):
+    import re
+    for pattern, replacement in CONCENTRATION_ALIASES.items():
+        text = re.sub(pattern, replacement, text)
+    return text
+
 
 @pandas_udf(DoubleType())
 def smart_fuzzy_score(names: pd.Series, search_term_series: pd.Series) -> pd.Series:
-    term = search_term_series.iloc[0].lower()
+    term = normalize_concentration(search_term_series.iloc[0].lower())
 
     def calculate_score(name):
         if pd.isna(name):
             return 0.0
-        name_lower = str(name).lower()
+        name_lower = normalize_concentration(str(name).lower())
         ratio = fuzz.ratio(name_lower, term)
         token_set = fuzz.token_set_ratio(name_lower, term)
         token_sort = fuzz.token_sort_ratio(name_lower, term)
@@ -43,10 +62,10 @@ search_results = (
     .withColumn("score", smart_fuzzy_score(col("name"), lit(search_term)))
     .filter(col("score") > 70)
     .orderBy(col("score").desc())
-    .limit(20)
+    .limit(200)
 )
 
-display(search_results.select("id", "name", "brand", "score"))
+display(search_results.select("id", "name", "brand", "release_year", "score", "url"))
 
 # COMMAND ----------
 
