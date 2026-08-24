@@ -19,7 +19,10 @@ sniffers/
 ├── common/                      # Shared Python logic, imported by notebooks/ AND streamlit_app/
 │   ├── matching.py              # Fuzzy name search (concentration normalization, scoring)
 │   ├── similarity.py            # Cosine similarity top-N (NumPy, no Spark/Streamlit deps)
-│   └── cleaning.py              # Shared regex field-extraction SQL fragment
+│   ├── cleaning.py              # Shared regex field-extraction SQL fragment
+│   ├── scraping.py              # scrape_fragrantica(url) — pure Python, no Spark
+│   ├── add_fragrance.py         # SQL-connector MERGE steps for adding one fragrance
+│   └── databricks_jobs.py       # Trigger a one-time Databricks job run via the Jobs API
 ├── data/
 │   ├── raw/                     # Original source data
 │   │   └── frag_raw.csv        # Raw fragrance dataset (external source, not scraped)
@@ -33,7 +36,9 @@ sniffers/
 │   ├── 02_generate_embeddings_job.py            # Batch embedding generation
 │   ├── 03_perfume_search.py                     # Fuzzy name search + NumPy similarity search
 │   ├── 04_add_update_fragrance.py               # Manual paste-in add/update tool
-│   └── 05_generate_embeddings_for_new_frag.py   # Incremental embedding upsert
+│   └── 05_generate_embeddings_for_new_frag.py   # Incremental embedding upsert (interactive/cell-by-cell version)
+├── jobs/
+│   └── generate_embeddings_for_new_frag.py      # Same logic as 05, as a plain script for automated job triggering
 ├── sql/
 │   ├── create generate_perfume_string function.dbquery.ipynb  # UDF used by clean_from_raw
 │   └── cardinality_of_embeddings.dbquery.ipynb               # Data quality check
@@ -62,7 +67,9 @@ frag_raw  ──[01_clean_from_raw.py]──▶  fragrance_cleaned
         │   frag_raw, incl. any                      accords, notes,
         │   newly added rows)                        perfume_string, url)
         ▼
-02_generate_embeddings_job.py (full/batch)  /  05_generate_embeddings_for_new_frag.py (incremental upsert)
+02_generate_embeddings_job.py (full/batch)  /  05_generate_embeddings_for_new_frag.py (incremental, run by hand)
+                                             /  jobs/generate_embeddings_for_new_frag.py (same logic, triggered as
+                                                a one-time job run by streamlit_app/app.py's "Add a fragrance" tab)
         ▼
 fragrance_embeddings   (id, perfume_string, embedding — one table, float32)
         ▼

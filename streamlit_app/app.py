@@ -177,7 +177,7 @@ def render_add_tab():
                     trigger_embedding_job(
                         host=creds["server_hostname"],
                         token=creds["access_token"],
-                        notebook_path=creds["notebook_path"],
+                        python_file=creds["embedding_job_python_file"],
                         cluster_id=creds.get("job_cluster_id"),
                     )
 

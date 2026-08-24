@@ -15,7 +15,9 @@ notebooks/04_add_update_fragrance.py            } → frag_raw
                                                   fragrance_cleaned
                                                           │
         notebooks/02_generate_embeddings_job.py (batch)
-        notebooks/05_generate_embeddings_for_new_frag.py (incremental)
+        notebooks/05_generate_embeddings_for_new_frag.py (incremental, run by hand)
+        jobs/generate_embeddings_for_new_frag.py (same logic, triggered as a Databricks
+                                                   job run by streamlit_app/app.py)
                                                           ▼
                                                 fragrance_embeddings
                                                           │
@@ -24,7 +26,7 @@ notebooks/04_add_update_fragrance.py            } → frag_raw
                                      shared via common/, not duplicated between the two)
 ```
 
-`notebooks/` is flat and numbered by pipeline order (`01_`–`05_`), not nested folders — one file per step. The actual matching/cleaning logic that both the notebook and the Streamlit app need lives in `common/` (`matching.py`, `similarity.py`, `cleaning.py`) as plain importable Python, not copy-pasted between them.
+`notebooks/` is flat and numbered by pipeline order (`01_`–`05_`), not nested folders — one file per step, meant to be run interactively/cell-by-cell for troubleshooting. `jobs/` holds plain-script twins of the notebooks that need to be triggered programmatically (currently just the embedding generator, triggered by the Streamlit app's "Add a fragrance" tab via the Databricks Jobs API as a one-time serverless run). The actual matching/cleaning/scraping logic that both the notebooks and the Streamlit app need lives in `common/` (`matching.py`, `similarity.py`, `cleaning.py`, `scraping.py`, `add_fragrance.py`, `databricks_jobs.py`) as plain importable Python, not copy-pasted between them.
 
 See `README.md` for the full structure and how to run each step.
 
