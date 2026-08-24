@@ -12,3 +12,5 @@ legacy/
 # Python virtual environments
 venv/
 .DS_Store
+
+.databricks

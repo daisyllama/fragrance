@@ -9,10 +9,10 @@
 df = spark.sql("""
 select a.id
 from fragrance_db.default.fragrance_cleaned a
-inner join fragrance_db.default.perfume_embeddings b
+left join fragrance_db.default.fragrance_embeddings b
   on a.id = b.id
-where a.perfume_string <> b.perfume_string
-and a.perfume_string is not NULL
+where a.perfume_string is not NULL
+and (b.id is NULL or a.perfume_string <> b.perfume_string)
 """)
 
 
@@ -60,50 +60,36 @@ embeddings_df = perfume_id_to_generate_embeddings_df.withColumn(
 print(f"Generated embeddings for {embeddings_df.count()} record(s).")
 
 
-# Cast as embedding col to double and id to long
+# Cast embedding col to float and id to long
 embeddings_df = embeddings_df.withColumn(
     "embedding",
-    F.expr("transform(embedding, x -> cast(x as double))") #TODO: change this to float
+    F.expr("transform(embedding, x -> cast(x as float))")
 ).withColumn(
     "id",
     F.col("id").cast("long")
 )
 
-# Add partition key for parallel writes / query efficiency
-embeddings_df = embeddings_df.withColumn(
-    "partition_key",
-    (F.col("id") % 10).cast("string")
-)
-
-
-
 # COMMAND ----------
 
-# DBTITLE 1,Write embeddings table to UC as delta table
-embeddings_df.write.format("delta").mode("append").saveAsTable("fragrance_db.default.perfume_embeddings")
-print(f"Added {embeddings_df.count()} embedding(s) to perfume_embeddings.")
+# DBTITLE 1,Upsert into fragrance_embeddings (covers both new and updated rows)
+from delta.tables import DeltaTable
+
+target = DeltaTable.forName(spark, "fragrance_db.default.fragrance_embeddings")
+
+(
+    target.alias("t")
+    .merge(embeddings_df.alias("s"), "t.id = s.id")
+    .whenMatchedUpdateAll()
+    .whenNotMatchedInsertAll()
+    .execute()
+)
+
+print(f"Upserted {embeddings_df.count()} embedding(s) into fragrance_embeddings.")
 
 cnt = (
-    spark.read.table("fragrance_db.default.perfume_embeddings")
+    spark.read.table("fragrance_db.default.fragrance_embeddings")
     .filter(F.col("embedding").isNotNull())
     .count()
 )
 
-
 print(f"Total count of fragrances with embeddings: {cnt}")
-
-# COMMAND ----------
-
-# # Optional: If new_embeddings count is large, then run this.
-# spark.sql("""
-# OPTIMIZE fragrance_db.default.perfume_embeddings
-# ZORDER BY (id)
-# """)
-
-# COMMAND ----------
-
-# %sql
-
-# OPTIMIZE fragrance_db.default.perfume_embeddings
-# ZORDER BY (id)
-# ;

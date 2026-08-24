@@ -15,9 +15,9 @@
 # MAGIC    - Preserves original data before transformation
 # MAGIC    - Uses URL as key
 # MAGIC
-# MAGIC 3. **Preview Transformation** (Cell 6): See how data will be processed
-# MAGIC    - Applies UDFs to extract id, name, brand, notes
-# MAGIC    - Generates perfume_string for embeddings
+# MAGIC 3. **Build cleaned_input** (Cell 6): Apply the same regex transform
+# MAGIC    `clean_from_raw.py` uses (id/name/brand/release_year/notes from url +
+# MAGIC    description), reused here as one shared view instead of two copies
 # MAGIC
 # MAGIC 4. **Check Existing Data** (Cell 7): Compare with database
 # MAGIC    - Verify if record exists and what will change
@@ -31,8 +31,7 @@
 # MAGIC
 # MAGIC ## Next Steps After Running
 # MAGIC
-# MAGIC - Run `generate_embeddings_for_new_frag` notebook to create vector embeddings
-# MAGIC - Sync to Vector Search index for production queries
+# MAGIC - Run `generate_embeddings_for_new_frag` notebook to create/update the embedding
 
 # COMMAND ----------
 
@@ -108,39 +107,43 @@ input_df.createOrReplaceTempView("temp_input")
 
 # COMMAND ----------
 
-# DBTITLE 1,Preview: Transform raw data using UDFs
+# DBTITLE 1,Build cleaned_input (same transform as clean_from_raw.py, one row)
 # MAGIC %sql
-# MAGIC -- Preview the transformation before merging
-# MAGIC -- This shows how the raw input will be processed
+# MAGIC -- Same regex-based extraction clean_from_raw.py uses for the bulk table,
+# MAGIC -- applied here to just the one row in temp_input. Defined once and reused
+# MAGIC -- below for both the preview and the MERGE, instead of two copies.
+# MAGIC -- No dependency on extract_* UDFs (their definitions aren't tracked in
+# MAGIC -- this repo, only generate_perfume_string is).
 # MAGIC
-# MAGIC with a as (
+# MAGIC CREATE OR REPLACE TEMP VIEW cleaned_input AS
+# MAGIC WITH a AS (
 # MAGIC     SELECT
-# MAGIC         fragrance_db.default.extract_id(url) AS id,
-# MAGIC         fragrance_db.default.extract_name(url) AS name,
-# MAGIC         fragrance_db.default.extract_brand(url) AS brand,
-# MAGIC         fragrance_db.default.extract_release_year(url) AS release_year,
+# MAGIC         REGEXP_EXTRACT(url, '([a-zA-Z0-9]+)\\.html$', 1) as id,
+# MAGIC         replace(regexp_extract(url, '/perfume/[^/]+/([^/]+)-[0-9]+\\.html', 1), '-', ' ') as name,
+# MAGIC         replace(regexp_extract(url, '/perfume/([^/]+)/', 1), '-', ' ') as brand,
+# MAGIC         REGEXP_EXTRACT(description, 'was launched in ([0-9]{4})', 1) as release_year,
 # MAGIC         gender,
-# MAGIC         fragrance_db.default.extract_accord(main_accords) AS accords,
-# MAGIC         fragrance_db.default.extract_top_notes(description) AS top_notes,
-# MAGIC         fragrance_db.default.extract_mid_notes(description) AS mid_notes,
-# MAGIC         fragrance_db.default.extract_base_notes(description) AS base_notes,
+# MAGIC         replace(replace(replace(main_accords, '[', ''), ']', ''),"'", "") as accords,
+# MAGIC         lower(replace(regexp_extract(description, '(?i)top note[s]? (is|are) ([^.;]*)', 2), ' and', ',')) as top_notes,
+# MAGIC         lower(replace(regexp_extract(description, '(?i)middle note[s]? (is|are) ([^.;]*)', 2), ' and', ',')) as mid_notes,
+# MAGIC         lower(replace(regexp_extract(description, '(?i)base note[s]? (is|are) ([^.;]*)', 2), ' and', ',')) as base_notes,
 # MAGIC         url,
 # MAGIC         description
 # MAGIC     FROM temp_input
-# MAGIC     )
-# MAGIC     select *, fragrance_db.default.generate_perfume_string(accords, top_notes, mid_notes, base_notes) as perfume_string
-# MAGIC     from a
-# MAGIC ;
+# MAGIC )
+# MAGIC SELECT *, fragrance_db.default.generate_perfume_string(accords, top_notes, mid_notes, base_notes) as perfume_string
+# MAGIC FROM a;
+# MAGIC
+# MAGIC SELECT * FROM cleaned_input;
 
 # COMMAND ----------
 
 # DBTITLE 1,Check: Compare with existing data
 # MAGIC %sql
 # MAGIC -- Compare the transformed data with existing data in the database
-# MAGIC -- Change the id to match your input (extract from url)
 # MAGIC
 # MAGIC SELECT * FROM fragrance_db.default.fragrance_cleaned
-# MAGIC WHERE id = (SELECT fragrance_db.default.extract_id(url) FROM temp_input);
+# MAGIC WHERE id = (SELECT id FROM cleaned_input);
 
 # COMMAND ----------
 
@@ -150,25 +153,7 @@ input_df.createOrReplaceTempView("temp_input")
 # MAGIC -- This stores the transformed and enriched data
 # MAGIC
 # MAGIC MERGE INTO fragrance_db.default.fragrance_cleaned AS target
-# MAGIC USING (
-# MAGIC   with a as (
-# MAGIC     SELECT
-# MAGIC         fragrance_db.default.extract_id(url) AS id,
-# MAGIC         fragrance_db.default.extract_name(url) AS name,
-# MAGIC         fragrance_db.default.extract_brand(url) AS brand,
-# MAGIC         fragrance_db.default.extract_release_year(url) AS release_year,
-# MAGIC         gender,
-# MAGIC         fragrance_db.default.extract_accord(main_accords) AS accords,
-# MAGIC         fragrance_db.default.extract_top_notes(description) AS top_notes,
-# MAGIC         fragrance_db.default.extract_mid_notes(description) AS mid_notes,
-# MAGIC         fragrance_db.default.extract_base_notes(description) AS base_notes,
-# MAGIC         url,
-# MAGIC         description
-# MAGIC     FROM temp_input
-# MAGIC     )
-# MAGIC     select *, fragrance_db.default.generate_perfume_string(accords, top_notes, mid_notes, base_notes) as perfume_string
-# MAGIC     from a
-# MAGIC ) as source
+# MAGIC USING cleaned_input AS source
 # MAGIC on target.id = source.id
 # MAGIC when matched then 
 # MAGIC   UPDATE SET
@@ -222,11 +207,11 @@ input_df.createOrReplaceTempView("temp_input")
 # MAGIC
 # MAGIC -- Delete from embeddings table
 # MAGIC DELETE FROM fragrance_db.default.fragrance_embeddings
-# MAGIC WHERE id = (SELECT fragrance_db.default.extract_id(url) AS id FROM temp_input);
+# MAGIC WHERE id = (SELECT id FROM cleaned_input);
 # MAGIC
 # MAGIC -- Delete from cleaned table
 # MAGIC DELETE FROM fragrance_db.default.fragrance_cleaned
-# MAGIC WHERE id = (SELECT fragrance_db.default.extract_id(url) AS id FROM temp_input);
+# MAGIC WHERE id = (SELECT id FROM cleaned_input);
 # MAGIC
 # MAGIC -- Delete from raw table
 # MAGIC DELETE FROM fragrance_db.default.frag_raw

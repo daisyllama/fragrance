@@ -1,154 +1,101 @@
 # Databricks notebook source
-dbutils.widgets.text("2. perfume_id_input", "")
-perfume_id_input = dbutils.widgets.get("2. perfume_id_input").strip()
-if perfume_id_input:  # This checks if the string is non-empty
-    perfume_id_input = int(perfume_id_input)
-else:
-    perfume_id_input = None
-print(perfume_id_input)
-
-dbutils.widgets.text("9. number of top results", "")
-limit_n = int(dbutils.widgets.get("9. number of top results").strip())
-print(limit_n)
+# MAGIC %md
+# MAGIC # Perfume Search
+# MAGIC
+# MAGIC Run cell by cell:
+# MAGIC 1. Set `search_term` and run the text-search cell → prints a table of candidate `id`s
+# MAGIC 2. Copy the `id` you want into `selected_id` and run the recommendation cells → top-N similar perfumes, with notes
 
 # COMMAND ----------
 
+# DBTITLE 1,Setup
 from rapidfuzz import fuzz
+import numpy as np
+import pandas as pd
 from pyspark.sql.functions import col, lit, pandas_udf
 from pyspark.sql.types import DoubleType
-import pandas as pd
 
-dbutils.widgets.text("1. search_term", "")
-search_term = dbutils.widgets.get("1. search_term").strip()  # Fixed: strip() on the result, not the key
-print(f"Searching for \"{search_term}\"...")
+fragrance_cleaned = spark.table("fragrance_db.default.fragrance_cleaned")
 
-# Load your data as Spark DataFrame
-df = spark.table("fragrance_db.default.fragrance_cleaned")
+# COMMAND ----------
 
-# Define pandas UDF for scoring
+# DBTITLE 1,Step 1 — search by text, get an id
+search_term = "velvet rouge"
+
 @pandas_udf(DoubleType())
 def smart_fuzzy_score(names: pd.Series, search_term_series: pd.Series) -> pd.Series:
-    search_term = search_term_series.iloc[0].lower()
-    
+    term = search_term_series.iloc[0].lower()
+
     def calculate_score(name):
         if pd.isna(name):
             return 0.0
-            
         name_lower = str(name).lower()
-        
-        # Multiple scoring strategies
-        ratio = fuzz.ratio(name_lower, search_term)
-        token_set = fuzz.token_set_ratio(name_lower, search_term)
-        token_sort = fuzz.token_sort_ratio(name_lower, search_term)
-        
-        # Bonus for substring match
-        substring_bonus = 20 if search_term in name_lower else 0
-        
-        # Weighted combination
-        final_score = (
-            ratio * 0.4 +
-            token_set * 0.4 +
-            token_sort * 0.2 +
-            substring_bonus * 0.1
-        )
-        
-        return final_score
-    
+        ratio = fuzz.ratio(name_lower, term)
+        token_set = fuzz.token_set_ratio(name_lower, term)
+        token_sort = fuzz.token_sort_ratio(name_lower, term)
+        substring_bonus = 20 if term in name_lower else 0
+        return ratio * 0.4 + token_set * 0.4 + token_sort * 0.2 + substring_bonus * 0.1
+
     return names.apply(calculate_score)
 
-# Apply the search
-search_results = (df
+search_results = (
+    fragrance_cleaned
     .withColumn("score", smart_fuzzy_score(col("name"), lit(search_term)))
     .filter(col("score") > 70)
     .orderBy(col("score").desc())
     .limit(20)
 )
 
-# Display results
 display(search_results.select("id", "name", "brand", "score"))
 
-selected_search_result = search_results.first().id
-print(f"id of the top search result: {selected_search_result}")
+# COMMAND ----------
+
+# DBTITLE 1,Step 2 — pick the id and how many recommendations you want
+selected_id = search_results.first().id  # or set manually, e.g. selected_id = 72944
+top_n = 3
+
+target = fragrance_cleaned.filter(col("id") == selected_id).select(
+    "id", "name", "brand", "accords", "top_notes", "mid_notes", "base_notes"
+).collect()[0]
+
+print(f"Selected: {target['name']} by {target['brand']} (id={target['id']})")
+display(spark.createDataFrame([target]))
 
 # COMMAND ----------
 
-import numpy as np
-from pyspark.sql.functions import udf, col, lit
-from pyspark.sql.types import DoubleType
-from pyspark.sql.window import Window
-from pyspark.sql.functions import row_number
+# DBTITLE 1,Compute similarity
+# Load every embedding once and compute cosine similarity as a single
+# vectorized matrix-vector product (one BLAS call over an in-memory NumPy
+# matrix), instead of a per-row UDF + a global Spark sort. At this table
+# size (~70K x 384 floats, ~100MB) this comfortably fits in driver memory.
+embeddings_pdf = spark.table("fragrance_db.default.fragrance_embeddings") \
+    .select("id", "embedding").toPandas()
+ids = embeddings_pdf["id"].to_numpy()
+matrix = np.stack(embeddings_pdf["embedding"].to_numpy()).astype(np.float32)
+norms = np.linalg.norm(matrix, axis=1)
 
-# Cosine similarity function
-def cosine_sim(a, b):
-    a, b = np.array(a, dtype=np.float32), np.array(b, dtype=np.float32)
-    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+target_idx = np.where(ids == selected_id)[0][0]
+similarities = (matrix @ matrix[target_idx]) / (norms * norms[target_idx])
 
-cosine_udf = udf(cosine_sim, DoubleType())
+n = top_n + 1  # +1 to drop the selected perfume itself below
+top_idx = np.argpartition(-similarities, n - 1)[:n]
+top_idx = top_idx[np.argsort(-similarities[top_idx])]
 
-# Get the vector of the target perfume
-try:
-    if perfume_id_input is not None:
-        selected_search_result = perfume_id_input
-except NameError:
-    pass
+recs_pdf = pd.DataFrame({
+    "id": ids[top_idx].astype("int64"),
+    "similarity": similarities[top_idx].astype("float64"),
+})
+recs_pdf = recs_pdf[recs_pdf["id"] != selected_id].head(top_n)
 
-target_vec = spark.table("fragrance_db.default.fragrance_embeddings") \
-    .filter(col("id") == selected_search_result) \
-    .select("embedding") \
-    .collect()[0][0]
+# COMMAND ----------
 
-target_name = spark.table("fragrance_db.default.fragrance_cleaned") \
-    .filter(col("id") == selected_search_result) \
-    .select("name") \
-    .collect()[0][0]
-
-brand = spark.table("fragrance_db.default.fragrance_cleaned") \
-    .filter(col("id") == selected_search_result) \
-    .select("brand") \
-    .collect()[0][0]
-
-# Compute similarity
-df = spark.table("fragrance_db.default.fragrance_embeddings")
-df_result = df.withColumn(
-    "similarity", 
-    cosine_udf(col("embedding"), lit(target_vec))
-).withColumn(
-    "rank", 
-    row_number().over(Window.orderBy(col("similarity").desc()))
+# DBTITLE 1,Step 3 — top-N recommendations, with notes
+recommendations = (
+    fragrance_cleaned
+    .select("id", "name", "brand", "gender", "accords", "top_notes", "mid_notes", "base_notes", "url")
+    .join(spark.createDataFrame(recs_pdf), on="id", how="inner")
+    .orderBy(col("similarity").desc())
 )
 
-limit_n = limit_n + 1 # To get top n results excluding selected perfume
-df_top_similarity_results = df_result.orderBy(col("rank").asc()).limit(limit_n)
-
-# COMMAND ----------
-
-display(df_top_similarity_results)
-
-# COMMAND ----------
-
-df_frag = spark.sql(f"""
-    SELECT id, name, brand, gender, accords, top_notes, mid_notes, base_notes, url
-    FROM fragrance_db.default.fragrance_cleaned
-    """
-)
-
-df_result_view = df_frag.join(
-    df_top_similarity_results.select("rank", "id", "similarity"),
-    on="id",
-    how="inner"
-).select((df_top_similarity_results["rank"]-1).alias("rank"), df_frag["*"], df_top_similarity_results["similarity"]
-).orderBy(col("similarity").desc())
-
-# COMMAND ----------
-
-count = df_result_view.count() - 1
-
-print(f"Top {count} similar perfumes to {target_name} by {brand} below:")
-display(df_result_view)
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC
-# MAGIC select * from fragrance_db.default.fragrance_cleaned 
-# MAGIC where id = 72944
+print(f"Top {top_n} similar perfumes to {target['name']} by {target['brand']}:")
+display(recommendations)

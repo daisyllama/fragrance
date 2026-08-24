@@ -21,9 +21,7 @@ def get_embeddings_udf(texts: pd.Series) -> pd.Series:
     embeddings = model.encode(texts.tolist(), convert_to_tensor=False)
     return pd.Series(embeddings.tolist())
 
-file_path = "/Volumes/fragrance_db/default/data/frag_cleaned_with_texts.csv"
-perfume_cleaned_df = spark.read.csv(str(file_path), header=True, inferSchema=True)
-perfume_cleaned_df = perfume_cleaned_df.select("id", "perfume_string")
+perfume_cleaned_df = spark.table("fragrance_db.default.fragrance_cleaned").select("id", "perfume_string")
 
 print(f"Row before filter counts: {perfume_cleaned_df.count()}")
 
@@ -41,12 +39,6 @@ embeddings_df = perfume_cleaned_df.withColumn(
     F.col("id").cast("long")
 )
 
-# Add partition key for parallel writes / query efficiency
-embeddings_df = embeddings_df.withColumn(
-    "partition_key",
-    (F.col("id") % 10).cast("string")
-)
-
 print(f"Row count after filter: {embeddings_df.count()}")
 
 # COMMAND ----------
@@ -56,28 +48,12 @@ embeddings_df.printSchema()
 
 # COMMAND ----------
 
-# DBTITLE 1,Generate the embeddings table for the first time
-# embeddings_df.write \
-#     .format("delta") \
-#     .mode("overwrite") \
-#     .partitionBy("partition_key") \
-#     .saveAsTable("fragrance_db.default.fragrance_embeddings")
-
-
-# COMMAND ----------
-
 # DBTITLE 1,Write embeddings table to UC as delta table
-from pyspark.sql import functions as F
-
 # Only append IDs that are not already in the embeddings table
 existing_ids = spark.table("fragrance_db.default.fragrance_embeddings").select("id")
 new_embeddings_df = embeddings_df.join(existing_ids, on="id", how="left_anti")
 
 print(f"New embeddings count: {new_embeddings_df.count()}")
-print(new_embeddings_df.count())
-
-
-
 
 
 # COMMAND ----------
@@ -86,7 +62,6 @@ if new_embeddings_df.count() > 0:
     new_embeddings_df.write \
         .format("delta") \
         .mode("append") \
-        .partitionBy("partition_key") \
         .saveAsTable("fragrance_db.default.fragrance_embeddings")
 else:
     print("No new embeddings to write.")
