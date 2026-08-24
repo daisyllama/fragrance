@@ -13,6 +13,11 @@ legacy/
 venv/
 .DS_Store
 
+# Python bytecode cache — Databricks Workspace/Git folders won't allow
+# pulling a __pycache__ directory, so this must never be committed
+__pycache__/
+*.pyc
+
 .databricks
 
 # Streamlit app secrets (Databricks connection details + token)
