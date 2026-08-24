@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "5"
+# ///
 # MAGIC %md
 # MAGIC # Perfume Search
 # MAGIC
@@ -20,7 +24,7 @@ fragrance_cleaned = spark.table("fragrance_db.default.fragrance_cleaned")
 # COMMAND ----------
 
 # DBTITLE 1,Step 1 — search by text, get an id
-search_term = "miss dior eau de parfum"
+search_term = "miss dior edp"
 
 # Perfume names store the concentration inconsistently ("edp" vs "eau de
 # parfum", etc.) — collapse both spellings to the same abbreviation before
@@ -61,8 +65,8 @@ search_results = (
     fragrance_cleaned
     .withColumn("score", smart_fuzzy_score(col("name"), lit(search_term)))
     .filter(col("score") > 70)
-    .orderBy(col("score").desc())
-    .limit(200)
+    .orderBy(col("score").desc(), col("release_year").desc())
+    .limit(20)
 )
 
 display(search_results.select("id", "name", "brand", "release_year", "score", "url"))
@@ -82,18 +86,35 @@ display(spark.createDataFrame([target]))
 
 # COMMAND ----------
 
+
+
+# COMMAND ----------
+
 # DBTITLE 1,Compute similarity
 # Load every embedding once and compute cosine similarity as a single
 # vectorized matrix-vector product (one BLAS call over an in-memory NumPy
 # matrix), instead of a per-row UDF + a global Spark sort. At this table
 # size (~70K x 384 floats, ~100MB) this comfortably fits in driver memory.
+
+try:
+    selected_id = int(selected_id)
+except (TypeError, ValueError):
+    raise ValueError(f"selected_id must be numeric, got {selected_id!r}")
+
 embeddings_pdf = spark.table("fragrance_db.default.fragrance_embeddings") \
     .select("id", "embedding").toPandas()
 ids = embeddings_pdf["id"].to_numpy()
 matrix = np.stack(embeddings_pdf["embedding"].to_numpy()).astype(np.float32)
 norms = np.linalg.norm(matrix, axis=1)
 
-target_idx = np.where(ids == selected_id)[0][0]
+matching_idx = np.where(ids == selected_id)[0]
+if len(matching_idx) == 0:
+    raise ValueError(
+        f"id {selected_id} has no row in fragrance_embeddings — it may not be "
+        "embedded yet. Run generate_embeddings_job.py or "
+        "generate_embeddings_for_new_frag.py for this fragrance first."
+    )
+target_idx = matching_idx[0]
 similarities = (matrix @ matrix[target_idx]) / (norms * norms[target_idx])
 
 n = top_n + 1  # +1 to drop the selected perfume itself below
@@ -105,6 +126,23 @@ recs_pdf = pd.DataFrame({
     "similarity": similarities[top_idx].astype("float64"),
 })
 recs_pdf = recs_pdf[recs_pdf["id"] != selected_id].head(top_n)
+
+# COMMAND ----------
+
+# DBTITLE 1,check embeddings
+# MAGIC %sql
+# MAGIC select * from fragrance_db.default.fragrance_embeddings 
+# MAGIC where id = '68905'
+# MAGIC ;
+# MAGIC
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC select * from fragrance_db.default.fragrance_cleaned
+# MAGIC where id = '68905'
+# MAGIC ;
+# MAGIC
 
 # COMMAND ----------
 
