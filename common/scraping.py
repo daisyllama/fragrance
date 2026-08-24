@@ -64,79 +64,71 @@ def scrape_fragrantica(url: str) -> dict:
     except Exception as e:
         print(f"Error extracting name/gender: {e}")
 
-    # 2. Rating and Rating Count (REVISED - using more general text search)
+    # 2. Rating and Rating Count
+    # As of the current site redesign, the rating lives in a
+    # schema.org AggregateRating block: a <span itemprop="ratingValue"> for
+    # the score, and a <span itemprop="ratingCount" content="33812"> for the
+    # vote count (the `content` attribute holds the clean unformatted
+    # number; the visible text is comma-formatted, e.g. "33,812").
     data['rating'] = 'N/A'
     data['rating_count'] = 'N/A'
     try:
-        # Search for the text pattern "Perfume rating X.XX out of 5 with Y votes" anywhere in the text
-        rating_text_tag = soup.find(string=re.compile(r'Perfume rating [\d\.]+ out of 5 with [\d,]+ votes'))
-        if rating_text_tag:
-            rating_text = rating_text_tag.strip()
+        rating_tag = soup.find(attrs={'itemprop': 'ratingValue'})
+        if rating_tag:
+            data['rating'] = float(rating_tag.get_text(strip=True))
 
-            rating_match = re.search(r'rating ([\d\.]+) out of 5', rating_text)
-            count_match = re.search(r'with ([\d,]+) votes', rating_text)
-
-            data['rating'] = float(rating_match.group(1)) if rating_match else 'N/A'
-            data['rating_count'] = int(count_match.group(1).replace(',', '')) if count_match else 'N/A'
-
-        # Fallback: Look for the specific div that contains the rating stars and text
-        if data['rating'] == 'N/A':
-            rating_div = soup.find('div', class_='rating-stars')
-            if rating_div:
-                rating_value_tag = rating_div.find('span', itemprop='ratingValue')
-                review_count_tag = rating_div.find('span', itemprop='reviewCount')
-
-                if rating_value_tag:
-                    data['rating'] = float(rating_value_tag.text.strip())
-                if review_count_tag:
-                    data['rating_count'] = int(review_count_tag.text.strip().replace(',', ''))
+        count_tag = soup.find(attrs={'itemprop': 'ratingCount'})
+        if count_tag:
+            count_value = count_tag.get('content') or count_tag.get_text(strip=True)
+            data['rating_count'] = int(re.sub(r'[^\d]', '', count_value))
 
     except Exception as e:
         print(f"Error extracting rating/count: {e}")
 
     # 3. Main Accords
+    # Now under an <h6>main accords</h6> heading, followed by a sibling div
+    # containing one <span class="truncate">accord name</span> per accord
+    # (no more accord-box/accord-bar classes).
     data['main_accords'] = []
     try:
-        # Main accords are usually in a div with class 'accord-box'
-        accord_box = soup.find('div', class_='accord-box')
-        if accord_box:
-            accords = accord_box.find_all('div', class_='accord-bar')
-            for accord in accords:
-                accord_name_tag = accord.find('span')
-                if accord_name_tag:
-                    data['main_accords'].append(accord_name_tag.text.strip().lower())
-                else:
-                    data['main_accords'].append(accord.text.strip().lower())
+        accords_heading = soup.find('h6', string=lambda s: s and 'main accords' in s.lower())
+        if accords_heading:
+            accords_container = accords_heading.find_next_sibling('div')
+            if accords_container:
+                for span in accords_container.find_all('span', class_='truncate'):
+                    data['main_accords'].append(span.get_text(strip=True).lower())
 
     except Exception as e:
         print(f"Error extracting main accords: {e}")
 
     # 4. Perfumers
+    # Links to /noses/<name>.html (the site's URL path for perfumer pages),
+    # excluding the generic nav link to /noses/ itself. Name text is in a
+    # <span> inside the link.
     data['perfumers'] = []
     try:
-        # Perfumer information is often a link with a href containing '/perfumer/'
-        perfumer_tag = soup.find('a', href=re.compile(r'/perfumer/'))
-        if perfumer_tag:
-            data['perfumers'].append(perfumer_tag.text.strip())
+        for link in soup.find_all('a', href=re.compile(r'^/noses/.+')):
+            name_tag = link.find('span')
+            name = (name_tag or link).get_text(strip=True)
+            if name and name not in data['perfumers']:
+                data['perfumers'].append(name)
 
     except Exception as e:
         print(f"Error extracting perfumers: {e}")
 
-    # 5. Description (REVISED - looking for the first <p> tag after the main title block)
+    # 5. Description
+    # Now in a <div itemprop="description">, whose first <p> holds the
+    # "X by Y is a fragrance for Z. Top notes are ...; middle notes are
+    # ...; base notes are ..." text that downstream note-extraction regexes
+    # (see common/cleaning.py) depend on.
     data['description'] = 'N/A'
     try:
-        # Find the main title <h1> tag
-        title_tag = soup.find('h1', class_='text-center')
-        if title_tag:
-            # Find the next sibling that is a <p> tag, which is often the main description
-            description_p = title_tag.find_next_sibling('p')
+        description_container = soup.find(attrs={'itemprop': 'description'})
+        if description_container:
+            description_p = description_container.find('p')
             if description_p:
-                data['description'] = description_p.text.strip()
-            else:
-                # Fallback to the original selector if the first one fails
-                description_div = soup.find('div', class_='text-content')
-                if description_div:
-                    data['description'] = description_div.text.strip()
+                text = description_p.get_text(separator=' ', strip=True)
+                data['description'] = re.sub(r'\s+', ' ', text)
 
     except Exception as e:
         print(f"Error extracting description: {e}")
