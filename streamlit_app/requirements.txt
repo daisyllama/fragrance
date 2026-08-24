@@ -1,0 +1,8 @@
+streamlit
+databricks-sql-connector
+databricks-sdk
+pandas
+numpy
+rapidfuzz
+requests
+beautifulsoup4

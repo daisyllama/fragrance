@@ -16,6 +16,10 @@ This project processes fragrance data and enables similarity search through:
 sniffers/
 ├── README.md                    # Project documentation
 ├── PLAN.md                      # Current state / possible next steps
+├── common/                      # Shared Python logic, imported by notebooks/ AND streamlit_app/
+│   ├── matching.py              # Fuzzy name search (concentration normalization, scoring)
+│   ├── similarity.py            # Cosine similarity top-N (NumPy, no Spark/Streamlit deps)
+│   └── cleaning.py              # Shared regex field-extraction SQL fragment
 ├── data/
 │   ├── raw/                     # Original source data
 │   │   └── frag_raw.csv        # Raw fragrance dataset (external source, not scraped)
@@ -24,46 +28,48 @@ sniffers/
 │   │   └── all_unique_accords_and_notes.json
 │   └── archive/
 │       └── frag_cleaned_ref.csv # Unrelated reference dataset (different schema), not part of the pipeline
-├── notebooks/
-│   ├── 01_data_processing/
-│   │   └── clean_from_raw      # frag_raw table → fragrance_cleaned table
-│   ├── 02_embeddings/
-│   │   └── generate_embeddings_job    # Batch embedding generation
-│   ├── 03_search/
-│   │   └── perfume_search      # Fuzzy name search + NumPy similarity search
-│   └── 04_maintenance/
-│       ├── add_update_fragrance             # Manual paste-in add/update tool
-│       └── generate_embeddings_for_new_frag # Incremental embedding upsert
+├── notebooks/                    # Flat, numbered by pipeline order — one Databricks notebook per step
+│   ├── 01_clean_from_raw.py                     # frag_raw table → fragrance_cleaned table
+│   ├── 02_generate_embeddings_job.py            # Batch embedding generation
+│   ├── 03_perfume_search.py                     # Fuzzy name search + NumPy similarity search
+│   ├── 04_add_update_fragrance.py               # Manual paste-in add/update tool
+│   └── 05_generate_embeddings_for_new_frag.py   # Incremental embedding upsert
 ├── sql/
 │   ├── create generate_perfume_string function.dbquery.ipynb  # UDF used by clean_from_raw
 │   └── cardinality_of_embeddings.dbquery.ipynb               # Data quality check
-└── scraping/
-    └── notebooks/
-        └── fragrantica_scraper.ipynb  # Scrape one Fragrantica URL, add it to frag_raw
+├── scraping/
+│   └── notebooks/
+│       └── fragrantica_scraper.ipynb  # Scrape one Fragrantica URL, add it to frag_raw
+└── streamlit_app/                # Local app: search + notes + recommendations, live-queries Databricks
+    ├── app.py
+    └── README.md                 # Setup (SQL warehouse connection, token)
 ```
 
 `legacy/` (gitignored, local only) holds superseded notebooks/data kept for reference — not part of the tracked project.
+
+Notebooks are experimentation/troubleshooting tools run cell-by-cell in Databricks; `streamlit_app/` is the actual user-facing app. Both call the same `common/` code for anything that isn't Spark-specific (matching, similarity, cleaning SQL) rather than duplicating logic — the notebooks only add the thin Spark wrapper (`pandas_udf`, `spark.sql(...)`) around it.
 
 ## How it fits together
 
 ```
 scraping/notebooks/fragrantica_scraper.ipynb   (scrape 1 URL)
-notebooks/04_maintenance/add_update_fragrance.py   (manual paste-in entry)
+notebooks/04_add_update_fragrance.py           (manual paste-in entry)
         │  both MERGE the new row into the frag_raw table (keyed by url)
         ▼
-frag_raw  ──[clean_from_raw.py]──▶  fragrance_cleaned
-        │  (full re-run recomputes                    (id, name, brand, gender,
-        │   the whole table from                        release_year, perfumers,
-        │   frag_raw, incl. any                          accords, notes,
-        │   newly added rows)                            perfume_string, url)
+frag_raw  ──[01_clean_from_raw.py]──▶  fragrance_cleaned
+        │  (full re-run recomputes                (id, name, brand, gender,
+        │   the whole table from                    release_year, perfumers,
+        │   frag_raw, incl. any                      accords, notes,
+        │   newly added rows)                        perfume_string, url)
         ▼
-generate_embeddings_job.py (full/batch)  /  generate_embeddings_for_new_frag.py (incremental upsert)
+02_generate_embeddings_job.py (full/batch)  /  05_generate_embeddings_for_new_frag.py (incremental upsert)
         ▼
 fragrance_embeddings   (id, perfume_string, embedding — one table, float32)
         ▼
-perfume_search.py:  rapidfuzz name resolve  →  NumPy cosine similarity
-                     (load all embeddings once, one matrix multiply — no UDF-per-row,
-                      no persistent search endpoint to keep running/pay for)
+03_perfume_search.py (notebook)  /  streamlit_app/app.py (local app)
+        rapidfuzz name resolve  →  NumPy cosine similarity
+        (load all embeddings once, one matrix multiply — no UDF-per-row,
+         no persistent search endpoint to keep running/pay for)
 ```
 
 ## Prerequisites
@@ -74,17 +80,21 @@ perfume_search.py:  rapidfuzz name resolve  →  NumPy cosine similarity
 
 ## Running the pipeline
 
-1. `notebooks/01_data_processing/clean_from_raw` — cleans `frag_raw` into `fragrance_cleaned`
-2. `notebooks/02_embeddings/generate_embeddings_job` — generates embeddings into `fragrance_embeddings` for any `fragrance_cleaned` rows not yet embedded
-3. `notebooks/03_search/perfume_search` — search by name (fuzzy match) or by `id`, get similar fragrances back
+1. `notebooks/01_clean_from_raw.py` — cleans `frag_raw` into `fragrance_cleaned`
+2. `notebooks/02_generate_embeddings_job.py` — generates embeddings into `fragrance_embeddings` for any `fragrance_cleaned` rows not yet embedded
+3. `notebooks/03_perfume_search.py` — search by name (fuzzy match) or by `id`, get similar fragrances back (for actual day-to-day use, use `streamlit_app/` instead — see below)
 
 ## Adding a fragrance
 
 Two entry points, both feed the same pipeline:
 - **`scraping/notebooks/fragrantica_scraper.ipynb`** — give it one Fragrantica URL, it scrapes the page and MERGEs a row into `frag_raw`
-- **`notebooks/04_maintenance/add_update_fragrance`** — paste in accords/description/gender by hand (for pages that can't be scraped, or corrections); also handles the `fragrance_cleaned` MERGE and lets you delete a test entry
+- **`notebooks/04_add_update_fragrance.py`** — paste in accords/description/gender by hand (for pages that can't be scraped, or corrections); also handles the `fragrance_cleaned` MERGE and lets you delete a test entry
 
-After either one, run `notebooks/04_maintenance/generate_embeddings_for_new_frag` to upsert the embedding for just the new/changed row(s) — no need to re-run the full batch job.
+After either one, run `notebooks/05_generate_embeddings_for_new_frag.py` to upsert the embedding for just the new/changed row(s) — no need to re-run the full batch job.
+
+## Using the app
+
+`streamlit_app/` is the actual user-facing tool: search a perfume, see its notes, get recommendations with theirs. Runs locally, queries the live Databricks tables. See `streamlit_app/README.md` for setup.
 
 ## Data Quality
 

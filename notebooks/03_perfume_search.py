@@ -13,11 +13,15 @@
 # COMMAND ----------
 
 # DBTITLE 1,Setup
-from rapidfuzz import fuzz
+import sys
+sys.path.append("..")  # repo root, so `common` (shared with streamlit_app/app.py) is importable
+
 import numpy as np
 import pandas as pd
 from pyspark.sql.functions import col, lit, pandas_udf
 from pyspark.sql.types import DoubleType
+
+from common.matching import normalize_concentration, fuzzy_score
 
 fragrance_cleaned = spark.table("fragrance_db.default.fragrance_cleaned")
 
@@ -26,40 +30,11 @@ fragrance_cleaned = spark.table("fragrance_db.default.fragrance_cleaned")
 # DBTITLE 1,Step 1 — search by text, get an id
 search_term = "miss dior edp"
 
-# Perfume names store the concentration inconsistently ("edp" vs "eau de
-# parfum", etc.) — collapse both spellings to the same abbreviation before
-# scoring so either form matches regardless of which one the name uses.
-CONCENTRATION_ALIASES = {
-    r"\beau de parfum\b": "edp",
-    r"\beau de toilette\b": "edt",
-    r"\beau de cologne\b": "edc",
-    r"\bextrait de parfum\b": "extrait",
-    r"\bparfum extrait\b": "extrait",
-}
-
-
-def normalize_concentration(text):
-    import re
-    for pattern, replacement in CONCENTRATION_ALIASES.items():
-        text = re.sub(pattern, replacement, text)
-    return text
-
 
 @pandas_udf(DoubleType())
 def smart_fuzzy_score(names: pd.Series, search_term_series: pd.Series) -> pd.Series:
     term = normalize_concentration(search_term_series.iloc[0].lower())
-
-    def calculate_score(name):
-        if pd.isna(name):
-            return 0.0
-        name_lower = normalize_concentration(str(name).lower())
-        ratio = fuzz.ratio(name_lower, term)
-        token_set = fuzz.token_set_ratio(name_lower, term)
-        token_sort = fuzz.token_sort_ratio(name_lower, term)
-        substring_bonus = 20 if term in name_lower else 0
-        return ratio * 0.4 + token_set * 0.4 + token_sort * 0.2 + substring_bonus * 0.1
-
-    return names.apply(calculate_score)
+    return names.apply(lambda name: fuzzy_score(name, term))
 
 search_results = (
     fragrance_cleaned
@@ -95,6 +70,7 @@ display(spark.createDataFrame([target]))
 # vectorized matrix-vector product (one BLAS call over an in-memory NumPy
 # matrix), instead of a per-row UDF + a global Spark sort. At this table
 # size (~70K x 384 floats, ~100MB) this comfortably fits in driver memory.
+from common.similarity import build_embedding_matrix, top_n_similar
 
 try:
     selected_id = int(selected_id)
@@ -104,28 +80,21 @@ except (TypeError, ValueError):
 embeddings_pdf = spark.table("fragrance_db.default.fragrance_embeddings") \
     .select("id", "embedding").toPandas()
 ids = embeddings_pdf["id"].to_numpy()
-matrix = np.stack(embeddings_pdf["embedding"].to_numpy()).astype(np.float32)
-norms = np.linalg.norm(matrix, axis=1)
+matrix, norms = build_embedding_matrix(embeddings_pdf["embedding"].to_numpy())
 
-matching_idx = np.where(ids == selected_id)[0]
-if len(matching_idx) == 0:
+try:
+    rec_ids, rec_similarities = top_n_similar(ids, matrix, norms, selected_id, top_n)
+except ValueError:
     raise ValueError(
         f"id {selected_id} has no row in fragrance_embeddings — it may not be "
         "embedded yet. Run generate_embeddings_job.py or "
         "generate_embeddings_for_new_frag.py for this fragrance first."
     )
-target_idx = matching_idx[0]
-similarities = (matrix @ matrix[target_idx]) / (norms * norms[target_idx])
-
-n = top_n + 1  # +1 to drop the selected perfume itself below
-top_idx = np.argpartition(-similarities, n - 1)[:n]
-top_idx = top_idx[np.argsort(-similarities[top_idx])]
 
 recs_pdf = pd.DataFrame({
-    "id": ids[top_idx].astype("int64"),
-    "similarity": similarities[top_idx].astype("float64"),
+    "id": rec_ids.astype("int64"),
+    "similarity": rec_similarities.astype("float64"),
 })
-recs_pdf = recs_pdf[recs_pdf["id"] != selected_id].head(top_n)
 
 # COMMAND ----------
 

@@ -1,4 +1,9 @@
 # Databricks notebook source
+import sys
+sys.path.append("..")  # repo root, so `common` (shared with 04_add_update_fragrance.py) is importable
+
+from common.cleaning import EXTRACTED_FIELDS_SQL
+
 frag_raw_df = spark.table("fragrance_db.default.frag_raw")
 frag_raw_df.show(n=5, truncate=False)
 
@@ -8,13 +13,10 @@ print(frag_raw_df.dtypes)
 # COMMAND ----------
 
 try:
-    cleaned_df = spark.sql("""
+    cleaned_df = spark.sql(f"""
     WITH ranked AS (
         SELECT
-            REGEXP_EXTRACT(url, '([a-zA-Z0-9]+)\\.html$', 1) as id,
-            replace(regexp_extract(url, '/perfume/[^/]+/([^/]+)-[0-9]+\\.html', 1), '-', ' ') as name,
-            replace(regexp_extract(url, '/perfume/([^/]+)/', 1), '-', ' ') as brand,
-            REGEXP_EXTRACT(description, 'was launched in ([0-9]{4})', 1) as release_year,
+            {EXTRACTED_FIELDS_SQL},
             replace(replace(replace(perfumers, '[', ''), ']', ''),"'", "") as perfumers,
             CASE
                 WHEN name LIKE '%for women and men' THEN 'unisex'
@@ -24,16 +26,12 @@ try:
             END as gender,
             TRY_CAST(REGEXP_REPLACE(rating_count, ',', '') AS INT) as rating_count,
             TRY_CAST(rating AS DECIMAL(10,2)) as rating,
-            replace(replace(replace(main_accords, '[', ''), ']', ''),"'", "") as accords,
-            lower(replace(regexp_extract(description, '(?i)top note[s]? (is|are) ([^.;]*)', 2), ' and', ',')) as top_notes,
-            lower(replace(regexp_extract(description, '(?i)middle note[s]? (is|are) ([^.;]*)', 2), ' and', ',')) as mid_notes,
-            lower(replace(regexp_extract(description, '(?i)base note[s]? (is|are) ([^.;]*)', 2), ' and', ',')) as base_notes,
             description,
             url,
             row_number() over (partition by url order by rating_count desc) as rn
         FROM fragrance_db.default.frag_raw
     )
-    SELECT 
+    SELECT
         *,
         TRIM(
         CONCAT(

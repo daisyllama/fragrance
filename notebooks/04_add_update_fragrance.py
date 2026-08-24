@@ -35,6 +35,13 @@
 
 # COMMAND ----------
 
+import sys
+sys.path.append("..")  # repo root, so `common` (shared with 01_clean_from_raw.py) is importable
+
+from common.cleaning import EXTRACTED_FIELDS_SQL
+
+# COMMAND ----------
+
 # copy and paste the accords from website to the space between quotes below:
 accords_raw = '''
 amber
@@ -108,33 +115,26 @@ input_df.createOrReplaceTempView("temp_input")
 # COMMAND ----------
 
 # DBTITLE 1,Build cleaned_input (same transform as clean_from_raw.py, one row)
-# MAGIC %sql
-# MAGIC -- Same regex-based extraction clean_from_raw.py uses for the bulk table,
-# MAGIC -- applied here to just the one row in temp_input. Defined once and reused
-# MAGIC -- below for both the preview and the MERGE, instead of two copies.
-# MAGIC -- No dependency on extract_* UDFs (their definitions aren't tracked in
-# MAGIC -- this repo, only generate_perfume_string is).
-# MAGIC
-# MAGIC CREATE OR REPLACE TEMP VIEW cleaned_input AS
-# MAGIC WITH a AS (
-# MAGIC     SELECT
-# MAGIC         REGEXP_EXTRACT(url, '([a-zA-Z0-9]+)\\.html$', 1) as id,
-# MAGIC         replace(regexp_extract(url, '/perfume/[^/]+/([^/]+)-[0-9]+\\.html', 1), '-', ' ') as name,
-# MAGIC         replace(regexp_extract(url, '/perfume/([^/]+)/', 1), '-', ' ') as brand,
-# MAGIC         REGEXP_EXTRACT(description, 'was launched in ([0-9]{4})', 1) as release_year,
-# MAGIC         gender,
-# MAGIC         replace(replace(replace(main_accords, '[', ''), ']', ''),"'", "") as accords,
-# MAGIC         lower(replace(regexp_extract(description, '(?i)top note[s]? (is|are) ([^.;]*)', 2), ' and', ',')) as top_notes,
-# MAGIC         lower(replace(regexp_extract(description, '(?i)middle note[s]? (is|are) ([^.;]*)', 2), ' and', ',')) as mid_notes,
-# MAGIC         lower(replace(regexp_extract(description, '(?i)base note[s]? (is|are) ([^.;]*)', 2), ' and', ',')) as base_notes,
-# MAGIC         url,
-# MAGIC         description
-# MAGIC     FROM temp_input
-# MAGIC )
-# MAGIC SELECT *, fragrance_db.default.generate_perfume_string(accords, top_notes, mid_notes, base_notes) as perfume_string
-# MAGIC FROM a;
-# MAGIC
-# MAGIC SELECT * FROM cleaned_input;
+# Same regex-based extraction 01_clean_from_raw.py uses for the bulk table
+# (imported from common/cleaning.py — one definition, not two copies),
+# applied here to just the one row in temp_input. No dependency on
+# extract_* UDFs (their definitions aren't tracked in this repo, only
+# generate_perfume_string is).
+spark.sql(f"""
+CREATE OR REPLACE TEMP VIEW cleaned_input AS
+WITH a AS (
+    SELECT
+        {EXTRACTED_FIELDS_SQL},
+        gender,
+        url,
+        description
+    FROM temp_input
+)
+SELECT *, fragrance_db.default.generate_perfume_string(accords, top_notes, mid_notes, base_notes) as perfume_string
+FROM a
+""")
+
+display(spark.sql("SELECT * FROM cleaned_input"))
 
 # COMMAND ----------
 

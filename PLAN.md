@@ -8,20 +8,23 @@ and a dead Vector Search endpoint setup). Those have been consolidated into one 
 
 ```
 scraping/notebooks/fragrantica_scraper.ipynb  \
-notebooks/04_maintenance/add_update_fragrance.py  } → frag_raw
+notebooks/04_add_update_fragrance.py            } → frag_raw
                                                           │
-                                    notebooks/01_data_processing/clean_from_raw.py
+                                          notebooks/01_clean_from_raw.py
                                                           ▼
                                                   fragrance_cleaned
                                                           │
-        notebooks/02_embeddings/generate_embeddings_job.py (batch)
-        notebooks/04_maintenance/generate_embeddings_for_new_frag.py (incremental)
+        notebooks/02_generate_embeddings_job.py (batch)
+        notebooks/05_generate_embeddings_for_new_frag.py (incremental)
                                                           ▼
                                                 fragrance_embeddings
                                                           │
-                                    notebooks/03_search/perfume_search.py
-                                    (rapidfuzz name resolve + NumPy cosine similarity)
+                                    notebooks/03_perfume_search.py  /  streamlit_app/app.py
+                                    (rapidfuzz name resolve + NumPy cosine similarity —
+                                     shared via common/, not duplicated between the two)
 ```
+
+`notebooks/` is flat and numbered by pipeline order (`01_`–`05_`), not nested folders — one file per step. The actual matching/cleaning logic that both the notebook and the Streamlit app need lives in `common/` (`matching.py`, `similarity.py`, `cleaning.py`) as plain importable Python, not copy-pasted between them.
 
 See `README.md` for the full structure and how to run each step.
 
