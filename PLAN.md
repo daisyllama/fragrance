@@ -1,6 +1,6 @@
 # Fragrance pipeline — current state
 
-## Status: single validated pipeline, personal/manual tool
+## Status: single validated pipeline, personal tool (mostly manual, embeddings step scheduled nightly)
 
 This project was previously split across three parallel, inconsistent implementations
 (a manual notebook path, an unfinished declarative Lakeflow bronze/silver/gold pipeline,
@@ -14,7 +14,9 @@ notebooks/04_add_update_fragrance.py            } → frag_raw
                                                           ▼
                                                   fragrance_cleaned
                                                           │
-        notebooks/02_generate_embeddings_job.py (batch)
+        notebooks/02_generate_embeddings_job.py (batch, scheduled nightly as a Databricks
+                                                  Job — configured in the workspace, not
+                                                  in this repo's databricks.yml)
         notebooks/05_generate_embeddings_for_new_frag.py (incremental, run by hand)
         jobs/generate_embeddings_for_new_frag.py (same logic, triggered as a Databricks
                                                    job run by streamlit_app/app.py)
@@ -26,7 +28,7 @@ notebooks/04_add_update_fragrance.py            } → frag_raw
                                      shared via common/, not duplicated between the two)
 ```
 
-`notebooks/` is flat and numbered by pipeline order (`01_`–`05_`), not nested folders — one file per step, meant to be run interactively/cell-by-cell for troubleshooting. `jobs/` holds plain-script twins of the notebooks that need to be triggered programmatically (currently just the embedding generator, triggered by the Streamlit app's "Add a fragrance" tab via the Databricks Jobs API as a one-time serverless run). The actual matching/cleaning/scraping logic that both the notebooks and the Streamlit app need lives in `common/` (`matching.py`, `similarity.py`, `cleaning.py`, `scraping.py`, `add_fragrance.py`, `databricks_jobs.py`) as plain importable Python, not copy-pasted between them.
+`notebooks/` is flat and numbered by pipeline order (`01_`–`05_`), not nested folders — one file per step, mostly meant to be run interactively/cell-by-cell for troubleshooting. The exception is `02_generate_embeddings_job.py`, which also runs unattended as a nightly scheduled Databricks Job (configured in the workspace, not in this repo's `databricks.yml`). `jobs/` holds plain-script twins of the notebooks that need to be triggered programmatically (currently just the embedding generator, triggered by the Streamlit app's "Add a fragrance" tab via the Databricks Jobs API as a one-time serverless run). The actual matching/cleaning/scraping logic that both the notebooks and the Streamlit app need lives in `common/` (`matching.py`, `similarity.py`, `cleaning.py`, `scraping.py`, `add_fragrance.py`, `databricks_jobs.py`) as plain importable Python, not copy-pasted between them.
 
 See `README.md` for the full structure and how to run each step.
 
@@ -35,7 +37,10 @@ See `README.md` for the full structure and how to run each step.
 - **No declarative Lakeflow pipeline.** The earlier `pipeline/bronze|silver|gold` attempt
   called Unity Catalog functions that were never defined anywhere and was missing the
   dedup-by-url step the notebook path has — it was never finished or run. This is a
-  personal, run-manually tool; a scheduled/declarative pipeline isn't needed.
+  personal tool, and a declarative bronze/silver/gold pipeline isn't needed — the one
+  piece that does need to run on its own (`notebooks/02_generate_embeddings_job.py`) is
+  handled with a plain nightly Databricks Job schedule instead, not a declarative
+  pipeline.
 - **No Databricks Vector Search endpoint.** It requires a persistently provisioned,
   billed endpoint. `perfume_search.py` instead loads all embeddings once per run and
   computes cosine similarity with a single NumPy matrix multiply — fast enough at this

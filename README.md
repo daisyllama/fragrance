@@ -1,6 +1,6 @@
 # Fragrance Intelligence Platform
 
-A personal Databricks tool for fragrance analysis, semantic search, and recommendation using vector embeddings. Run manually, notebook by notebook — no scheduled jobs or always-on infrastructure.
+A personal Databricks tool for fragrance analysis, semantic search, and recommendation using vector embeddings. Most notebooks are run manually, notebook by notebook — the exception is `notebooks/02_generate_embeddings_job.py`, which runs nightly as a Databricks Job (configured in the workspace, not committed as a bundle resource in this repo) to incrementally embed new/unprocessed fragrance records. No always-on infrastructure otherwise.
 
 ## Overview
 
@@ -67,7 +67,7 @@ frag_raw  ──[01_clean_from_raw.py]──▶  fragrance_cleaned
         │   frag_raw, incl. any                      accords, notes,
         │   newly added rows)                        perfume_string, url)
         ▼
-02_generate_embeddings_job.py (full/batch)  /  05_generate_embeddings_for_new_frag.py (incremental, run by hand)
+02_generate_embeddings_job.py (full/batch, scheduled nightly as a Databricks Job)  /  05_generate_embeddings_for_new_frag.py (incremental, run by hand)
                                              /  jobs/generate_embeddings_for_new_frag.py (same logic, triggered as
                                                 a one-time job run by streamlit_app/app.py's "Add a fragrance" tab)
         ▼
@@ -87,9 +87,9 @@ fragrance_embeddings   (id, perfume_string, embedding — one table, float32)
 
 ## Running the pipeline
 
-1. `notebooks/01_clean_from_raw.py` — cleans `frag_raw` into `fragrance_cleaned`
-2. `notebooks/02_generate_embeddings_job.py` — generates embeddings into `fragrance_embeddings` for any `fragrance_cleaned` rows not yet embedded
-3. `notebooks/03_perfume_search.py` — search by name (fuzzy match) or by `id`, get similar fragrances back (for actual day-to-day use, use `streamlit_app/` instead — see below)
+1. `notebooks/01_clean_from_raw.py` — run manually; cleans `frag_raw` into `fragrance_cleaned`
+2. `notebooks/02_generate_embeddings_job.py` — runs nightly as a scheduled Databricks Job (configured in the workspace); generates embeddings into `fragrance_embeddings` for any `fragrance_cleaned` rows not yet embedded
+3. `notebooks/03_perfume_search.py` — run manually; search by name (fuzzy match) or by `id`, get similar fragrances back (for actual day-to-day use, use `streamlit_app/` instead — see below)
 
 ## Adding a fragrance
 
