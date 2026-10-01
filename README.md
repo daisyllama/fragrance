@@ -1,5 +1,7 @@
 # Fragrance Intelligence Platform
 
+[![tests](https://github.com/daisyllama/fragrance/actions/workflows/tests.yml/badge.svg)](https://github.com/daisyllama/fragrance/actions/workflows/tests.yml)
+
 A personal Databricks tool for fragrance analysis, semantic search, and recommendation using vector embeddings. Most notebooks are run manually, notebook by notebook — the exception is `notebooks/02_generate_embeddings_job.py`, which runs nightly as a Databricks Job (configured in the workspace, not committed as a bundle resource in this repo) to incrementally embed new/unprocessed fragrance records. No always-on infrastructure otherwise.
 
 ## Overview
@@ -102,6 +104,17 @@ After either one, run `notebooks/05_generate_embeddings_for_new_frag.py` to upse
 ## Using the app
 
 `streamlit_app/` is the actual user-facing tool: search a perfume, see its notes, get recommendations with theirs. Runs locally, queries the live Databricks tables. See `streamlit_app/README.md` for setup.
+
+## Running tests
+
+Unit tests in `tests/` cover the shared `common/` code and mock out all network and Databricks calls, so they need no workspace credentials:
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+CI (`.github/workflows/tests.yml`) runs the same thing on every push and PR to `main`. It installs `requirements-dev.txt` rather than the root `requirements.txt`, which is the heavier Databricks/notebook environment.
 
 ## Data Quality
 
