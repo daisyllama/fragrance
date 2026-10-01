@@ -1,0 +1,9 @@
+# Test dependencies — what common/ and tests/ actually import.
+# Root requirements.txt is the Databricks/notebook environment and is not needed to run tests.
+pytest
+numpy
+pandas
+rapidfuzz
+requests
+beautifulsoup4
+databricks-sdk

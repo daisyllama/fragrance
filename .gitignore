@@ -1,5 +1,7 @@
 # Ignore generated data and output files
 *.json
+# Task index is hand-maintained, not generated — keep it tracked
+!docs/tasks/tasks.json
 *.csv
 *.parquet
 

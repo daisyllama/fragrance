@@ -1,0 +1,15 @@
+{
+  "next_id": 2,
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "title": "Run pytest in CI via GitHub Actions",
+      "status": "in-progress",
+      "file": "docs/tasks/in-progress/TASK-001-pytest-ci-workflow.md",
+      "decision_doc": "docs/tasks/decisions/TASK-001-pytest-ci-workflow.md",
+      "created": "2026-10-01",
+      "completed": null,
+      "notes": "Implemented on ci/pytest-upgrade; 74 tests pass locally in fresh venv. Remaining: push branch + open PR to confirm green CI run (AC 7), then move to completed."
+    }
+  ]
+}
