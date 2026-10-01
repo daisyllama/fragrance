@@ -1,6 +1,6 @@
 # TASK-001: Run pytest in CI via GitHub Actions
 
-- **Status:** in-progress
+- **Status:** completed
 - **Created:** 2026-10-01
 - **Branch:** `ci/pytest-upgrade`
 
@@ -51,4 +51,4 @@ Out of scope:
 ## Progress (2026-10-01)
 
 - AC 1–6 done. See [decision doc](../decisions/TASK-001-pytest-ci-workflow.md).
-- AC 7 (green check on a PR) is pending a push of `ci/pytest-upgrade`.
+- AC 7 met: PR #1 check passed (run 36810758556), merged to main as 5fc0817.
