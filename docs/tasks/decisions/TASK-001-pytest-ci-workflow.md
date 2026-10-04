@@ -1,6 +1,6 @@
 # Decisions: TASK-001 — Run pytest in CI via GitHub Actions
 
-Task: [TASK-001](../in-progress/TASK-001-pytest-ci-workflow.md) · Branch: `ci/pytest-upgrade` · Date: 2026-10-01
+Task: [TASK-001](../completed/TASK-001-pytest-ci-workflow.md) · Branch: `ci/pytest-upgrade` · Date: 2026-10-01
 
 ## 1. Separate `requirements-dev.txt` for test dependencies
 
@@ -42,4 +42,4 @@ Task: [TASK-001](../in-progress/TASK-001-pytest-ci-workflow.md) · Branch: `ci/p
 
 - Fresh venv with `requirements-dev.txt` only, then `pytest`: **74 passed** (all six test modules).
 - Workflow YAML parses; triggers and steps as specified.
-- Not yet verified: an actual GitHub Actions run (AC 7). Requires pushing `ci/pytest-upgrade` and opening a PR.
+- GitHub Actions: PR #1 run 36810758556 passed in 24s; merged to `main` as 5fc0817.
